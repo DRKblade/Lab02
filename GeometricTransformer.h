@@ -213,6 +213,50 @@ public:
 	~PixelInterpolate() {}
 };
 
+class BilinearInterpolate : public PixelInterpolate
+{
+	AffineTransform* tf;// cần phép affine gốc để có matrận nghịch đảo, nếu không thì sẽ không có đủ thông tin nội suy
+	Mat scr; // cần giới hạn chiều cao chiều dài ảnh
+	uchar black[3];
+public:
+	void Interpolate(uchar* pDest, float tx, float ty, uchar* pSrc, int srcWidthStep, int nChannels) {
+		tf->InversePoint(tx, ty); // đặt tx=y và ty = x, vì lí do xét theo ma trận.
+		auto x = static_cast<int>(tx);
+		auto y = static_cast<int>(ty);
+		if ((x < 0 or x >= scr.rows) or (y < 0 or y >= scr.cols)) 
+		{
+  		for (int i = 0; i < nChannels; i++) 
+  		{
+  			pDest[i] = 0;
+  		}
+		} else {
+  		pSrc += x * srcWidthStep;
+  		pSrc += y * nChannels;
+  		auto src00 = pSrc;
+  		auto src10 = x == scr.rows-1 ? (uchar*)&black : pSrc + srcWidthStep;
+  		auto src01 = y == scr.cols-1 ? (uchar*)&black : src00 + nChannels;
+  		auto src11 = x == scr.rows-1 || y == scr.cols-1 ? (uchar*)&black : src01 + srcWidthStep;
+  		auto dx = tx - static_cast<float>(x);
+  		auto dy = ty - static_cast<float>(y);
+      auto dx2 = 1 - dx;
+      auto dy2 = 1 - dy;
+  		for (int i = 0; i < nChannels; i++) 
+  		{
+  			pDest[i] = static_cast<uchar>(round((static_cast<float>(src11[i])*dx*dy + static_cast<float>(src10[i])*dx*dy2 + static_cast<float>(src01[i])*dx2*dy + static_cast<float>(src00[i])*dx2*dy2)));
+  		}
+		}
+	}
+	void setAffineMatrix(AffineTransform* matrix) 
+	{
+		this->tf = matrix;
+	}
+	BilinearInterpolate(AffineTransform* affine1, Mat source) 
+	{
+		this->tf = affine1;
+		this->scr = source;
+	}
+	~BilinearInterpolate(){}
+};;
 /*
 Lớp nội suy màu theo phương pháp láng giềng gần nhất
 */
@@ -224,24 +268,22 @@ public:
 	void Interpolate(uchar* pDest, float tx, float ty, uchar* pSrc, int srcWidthStep, int nChannels) 
 	{
 		tf->InversePoint(tx, ty); // đặt tx=y và ty = x, vì lí do xét theo ma trận.
-		tx = round(tx);
-		ty = round(ty);
-		if ((tx < 0 or tx >= scr.rows) or (ty < 0 or ty >= scr.cols)) 
+		int x = (int)round(tx);
+		int y = (int)round(ty);
+		if ((x < 0 or x >= scr.rows) or (y < 0 or y >= scr.cols)) 
 		{
   		for (int i = 0; i < nChannels; i++) 
   		{
   			pDest[i] = 0;
   		}
+		} else {
+  		pSrc += x * srcWidthStep;
+  		pSrc += y * nChannels;
+  		for (int i = 0; i < nChannels; i++) 
+  		{
+  			pDest[i] = pSrc[i];
+  		}
 		}
-		int x = (int)tx;
-		int y = (int)ty;
-		pSrc += x * srcWidthStep;
-		pSrc += y * nChannels;
-		for (int i = 0; i < nChannels; i++) 
-		{
-			pDest[i] = pSrc[i];
-		}
-
 	}
 	NearestNeighborInterpolate(AffineTransform* affine1, Mat source) 
 	{
@@ -273,44 +315,49 @@ public:
 	 - 0: Nếu ảnh input ko tồn tại hay ko thực hiện được phép biến đổi
 	 - 1: Nếu biến đổi thành công
 	*/
-	int Transform(const Mat& beforeImage, Mat& afterImage, AffineTransform* transformer, PixelInterpolate* interpolator) // tương tự Ox là tọa độ rows (hướng dọc xuống), Oy là tọa độ columms(từ trái qua phải)
+	int Transform(const Mat& beforeImage, Mat& afterImage, AffineTransform* transformer, PixelInterpolate* interpolator, bool expand = true) // tương tự Ox là tọa độ rows (hướng dọc xuống), Oy là tọa độ columms(từ trái qua phải)
 	{
-		if (beforeImage.empty())return 0;
-		float x = 0;
-		float y = 0;
-		point temp[4];
-		//tìm tọa độ mới thông qua affine của tọa độ 4 góc ảnh của ảnh gốc
-		transformer->TransformPoint(x, y);
-		temp[0].x = x;
-		temp[0].y = y;
-		x = 0;
-		y = beforeImage.cols - 1;
-		transformer->TransformPoint(x, y);
-		temp[1].x = x;
-		temp[1].y = y;
-		x = beforeImage.rows - 1;
-		y = 0;
-		transformer->TransformPoint(x, y);
-		temp[2].x = x;
-		temp[2].y = y;
-		x = beforeImage.rows - 1;
-		y = beforeImage.cols - 1;
-		transformer->TransformPoint(x, y);
-		temp[3].x = x;
-		temp[3].y = y;
 		float minx, maxx, miny, maxy;
-		minx = maxx = temp[0].x;
-		miny = maxy = temp[0].y;
-		for (int i = 0; i < 4; i++) 
-		{
-			if (temp[i].x > maxx) maxx = temp[i].x;
-			if (temp[i].y > maxy) maxy = temp[i].y;
-			if (temp[i].x < minx) minx = temp[i].x;
-			if (temp[i].y < miny) miny = temp[i].y;
-		}//tìm giá trị lớn nhất nhỏ nhất của x và y để tính size ảnh mới
-		float newheight = ceil(maxx - minx);
-		float newwidth = ceil(maxy - miny);
-		afterImage = Mat(newheight, newwidth, beforeImage.type());
+		if (beforeImage.empty())return 0;
+		if (expand) {
+  		float x = 0;
+  		float y = 0;
+  		point temp[4];
+  		//tìm tọa độ mới thông qua affine của tọa độ 4 góc ảnh của ảnh gốc
+  		transformer->TransformPoint(x, y);
+  		temp[0].x = x;
+  		temp[0].y = y;
+  		x = 0;
+  		y = beforeImage.cols - 1;
+  		transformer->TransformPoint(x, y);
+  		temp[1].x = x;
+  		temp[1].y = y;
+  		x = beforeImage.rows - 1;
+  		y = 0;
+  		transformer->TransformPoint(x, y);
+  		temp[2].x = x;
+  		temp[2].y = y;
+  		x = beforeImage.rows - 1;
+  		y = beforeImage.cols - 1;
+  		transformer->TransformPoint(x, y);
+  		temp[3].x = x;
+  		temp[3].y = y;
+  		minx = maxx = temp[0].x;
+  		miny = maxy = temp[0].y;
+  		for (int i = 1; i < 4; i++) 
+  		{
+  			if (temp[i].x > maxx) maxx = temp[i].x;
+  			if (temp[i].y > maxy) maxy = temp[i].y;
+  			if (temp[i].x < minx) minx = temp[i].x;
+  			if (temp[i].y < miny) miny = temp[i].y;
+  		}//tìm giá trị lớn nhất nhỏ nhất của x và y để tính size ảnh mới
+  		float newheight = ceil(maxx - minx);
+  		float newwidth = ceil(maxy - miny);
+  		afterImage = Mat(newheight, newwidth, beforeImage.type());
+		} else {
+  		afterImage = Mat(beforeImage.rows, beforeImage.cols, beforeImage.type());
+  		minx = miny = 0;
+		}
 		if (afterImage.empty())return 0;
 		else 
 		{
@@ -334,6 +381,7 @@ public:
 			return 1;
 		}
 	}
+
 	int Flip(
 		const Mat& srcImage,
 		Mat& dstImage,

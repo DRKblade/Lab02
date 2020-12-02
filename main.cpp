@@ -19,15 +19,36 @@ int main(int argc, char* argv[])
 	{
 		interpolator = new NearestNeighborInterpolate(&u, source);
 	}
+	else if (interpolate.find("bl") != -1)
+	{
+  	interpolator = new BilinearInterpolate(&u, source);
+	}
 	else return 0;
-	if (command.find("flip") != -1)
+	if (command.compare("--flip") == 0)
 	{
 		geometricTransformer.Flip(source, des, argument1, interpolator);
 	}
-	else if (command.find("zoom") != -1)
+	else if (command.compare("--zoom") == 0)
 	{
   	u.Scale(argument1, argument1);
   	geometricTransformer.Transform(source, des, &u, interpolator);
+	}
+	else if (command.compare("--resize") == 0)
+	{
+  	u.Scale(argument1 / source.cols, argument2 / source.rows);
+  	geometricTransformer.Transform(source, des, &u, interpolator);
+	}
+	else if (command.compare("--rotate") == 0)
+	{
+  	u.Rotate(argument1);
+  	geometricTransformer.Transform(source, des, &u, interpolator);
+	}
+	else if (command.compare("--rotateN") == 0)
+	{
+  	u.Translate(-source.cols/2, -source.rows/2);
+  	u.Rotate(argument1);
+  	u.Translate(source.cols/2, source.rows/2);
+  	geometricTransformer.Transform(source, des, &u, interpolator, false);
 	}
 	if (interpolator != NULL)delete interpolator;
 	namedWindow("Source Image");
